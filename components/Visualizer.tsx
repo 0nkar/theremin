@@ -1,65 +1,65 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { audioEngine } from '../services/audioEngine';
 
-interface VisualizerProps {
-  isStarted: boolean;
-}
-
-export const Visualizer: React.FC<VisualizerProps> = ({ isStarted }) => {
+export const Visualizer: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animationFrameRef = useRef<number>(0);
 
-  const draw = useCallback(() => {
+  useEffect(() => {
     const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    const analyser = audioEngine.getAnalyser();
+    if (!canvas) return;
 
-    if (!ctx || !canvas || !analyser) {
-      animationFrameRef.current = requestAnimationFrame(draw);
-      return;
-    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let animationId: number;
+    const analyser = audioEngine.getAnalyser();
+    
+    if (!analyser) return;
 
     const bufferLength = analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
-    analyser.getByteTimeDomainData(dataArray);
 
-    ctx.fillStyle = 'rgba(5, 5, 5, 0.2)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = '#00ffff';
-    ctx.shadowBlur = 5;
-    ctx.shadowColor = '#00ffff';
-    ctx.beginPath();
+    const draw = () => {
+      animationId = requestAnimationFrame(draw);
 
-    const sliceWidth = (canvas.width * 1.0) / bufferLength;
-    let x = 0;
+      analyser.getByteTimeDomainData(dataArray);
 
-    for (let i = 0; i < bufferLength; i++) {
-      const v = dataArray[i] / 128.0;
-      const y = (v * canvas.height) / 2;
-      if (i === 0) {
-        ctx.moveTo(x, y);
-      } else {
-        ctx.lineTo(x, y);
+      // Fade out effect
+      ctx.fillStyle = 'rgba(5, 5, 5, 0.2)'; 
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#00ffff'; // Cyan
+      ctx.shadowBlur = 5;
+      ctx.shadowColor = '#00ffff';
+      ctx.beginPath();
+
+      const sliceWidth = canvas.width * 1.0 / bufferLength;
+      let x = 0;
+
+      for (let i = 0; i < bufferLength; i++) {
+        const v = dataArray[i] / 128.0;
+        const y = (v * canvas.height) / 2;
+
+        if (i === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+
+        x += sliceWidth;
       }
-      x += sliceWidth;
-    }
 
-    ctx.lineTo(canvas.width, canvas.height / 2);
-    ctx.stroke();
-
-    animationFrameRef.current = requestAnimationFrame(draw);
-  }, []);
-
-  useEffect(() => {
-    if (isStarted) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = requestAnimationFrame(draw);
-    }
-    return () => {
-      cancelAnimationFrame(animationFrameRef.current);
+      ctx.lineTo(canvas.width, canvas.height / 2);
+      ctx.stroke();
     };
-  }, [isStarted, draw]);
+
+    draw();
+
+    return () => {
+      cancelAnimationFrame(animationId);
+    };
+  }, []);
 
   return (
     <canvas 
