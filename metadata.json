@@ -1,5 +1,5 @@
 {
-  "name": "Sci-Fi Air Theremin",
+  "name": "Theremin",
   "description": "A touchless musical instrument controlled by your hands using computer vision and the Web Audio API.",
   "requestFramePermissions": [
     "camera",

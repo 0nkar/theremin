@@ -2,176 +2,117 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { audioEngine } from './services/audioEngine';
 import { Visualizer } from './components/Visualizer';
 import { Controls } from './components/Controls';
-import { HUD, HUDRef } from './components/HUD';
 import { WaveformType, Results, HandLandmark } from './types';
-import './index.css';
 
 // Lerp helper for smoothing
-const lerp = (start: number, end: number, amt: number) => (1 - amt) * start + amt * end;
+const lerp = (start: number, end: number, amt: number) => {
+  return (1 - amt) * start + amt * end;
+};
 
 // Geometry helpers
-const getDistance = (p1: HandLandmark, p2: HandLandmark) =>
-  Math.hypot(p1.x - p2.x, p1.y - p2.y);
+const getDistance = (p1: HandLandmark, p2: HandLandmark) => {
+  return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+};
 
-/* ── Particle system canvas ── */
-function ParticleBackground() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d')!;
-
-    const resize = () => {
-      canvas.width  = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    resize();
-    window.addEventListener('resize', resize);
-
-    const particles = Array.from({ length: 80 }, () => ({
-      x: Math.random() * canvas.width,
-      y: Math.random() * canvas.height,
-      r: Math.random() * 1.2 + 0.3,
-      vx: (Math.random() - 0.5) * 0.15,
-      vy: (Math.random() - 0.5) * 0.15,
-      opacity: Math.random() * 0.4 + 0.1,
-    }));
-
-    let id: number;
-    const draw = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      for (const p of particles) {
-        p.x += p.vx; p.y += p.vy;
-        if (p.x < 0) p.x = canvas.width;
-        if (p.x > canvas.width) p.x = 0;
-        if (p.y < 0) p.y = canvas.height;
-        if (p.y > canvas.height) p.y = 0;
-
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(0,255,255,${p.opacity})`;
-        ctx.fill();
-      }
-      id = requestAnimationFrame(draw);
-    };
-    draw();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(id);
-    };
-  }, []);
-
-  return <canvas id="particle-canvas" ref={canvasRef} />;
-}
-
-/* ══════════════════════════════════════════ */
 const App: React.FC = () => {
-  const [isStarted, setIsStarted]   = useState(false);
-  const [isLoading, setIsLoading]   = useState(false);
-  const [error, setError]           = useState<string | null>(null);
-
+  const [isStarted, setIsStarted] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  
   // Audio State
-  const [waveform, setWaveform]           = useState<WaveformType>('sine');
-  const [delayMix, setDelayMix]           = useState(0.3);
-  const [isAnalogMode, setIsAnalogMode]   = useState(false);
-  const [vibratoDepth, setVibratoDepth]   = useState(0);
-  const [vibratoRate,  setVibratoRate]    = useState(5);
-
-  // Gesture feedback
+  const [waveform, setWaveform] = useState<WaveformType>('sine');
+  const [delayMix, setDelayMix] = useState(0.3);
+  
+  // UI Feedback State
+  const [activePitch, setActivePitch] = useState(0);
+  const [activeVol, setActiveVol] = useState(0);
+  const [rightHandActive, setRightHandActive] = useState(false);
+  const [leftHandActive, setLeftHandActive] = useState(false);
   const [gestureFeedback, setGestureFeedback] = useState<string | null>(null);
 
-  // Refs
-  const videoRef  = useRef<HTMLVideoElement>(null);
+  // Refs for logic
+  const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const hudRef    = useRef<HUDRef>(null);
-
-  const targetPitch     = useRef(440);
-  const currentPitch    = useRef(440);
-  const targetVol       = useRef(0);
-  const currentVol      = useRef(0);
+  const targetPitch = useRef(440);
+  const currentPitch = useRef(440);
+  const targetVol = useRef(0);
+  const currentVol = useRef(0);
   const animationFrameRef = useRef<number>(0);
-  const handsRef        = useRef<any>(null);
-  const cameraRef       = useRef<any>(null);
+  const handsRef = useRef<any>(null);
+  const cameraRef = useRef<any>(null);
+  
+  // Gesture Refs
   const lastGestureTime = useRef<number>(0);
-
-  const gestureCooldown = 1000;
-  const MIN_FREQ = 100;
-  const MAX_FREQ = 1500;
-  const WAVES: WaveformType[] = ['sine', 'triangle', 'sawtooth', 'square'];
-
-  // Refs mirror for use inside onResults (stale closure avoidance)
-  const waveformRef    = useRef(waveform);
-  const delayMixRef    = useRef(delayMix);
-  useEffect(() => { waveformRef.current = waveform; },  [waveform]);
-  useEffect(() => { delayMixRef.current = delayMix; },  [delayMix]);
-
-  // ── Handlers (memoized) ──
-  const handleWaveformChange = useCallback((type: WaveformType) => {
-    setWaveform(type);
-    audioEngine.setWaveform(type);
-  }, []);
-
-  const handleDelayChange = useCallback((mix: number) => {
-    setDelayMix(mix);
-    audioEngine.setDelayMix(mix);
-  }, []);
-
-  const handleAnalogModeChange = useCallback((enabled: boolean) => {
-    setIsAnalogMode(enabled);
-    audioEngine.setAnalogMode(enabled);
-  }, []);
-
-  const handleVibratoDepthChange = useCallback((depth: number) => {
-    setVibratoDepth(depth);
-    audioEngine.setVibratoDepth(depth);
-  }, []);
-
-  const handleVibratoRateChange = useCallback((rate: number) => {
-    setVibratoRate(rate);
-    audioEngine.setVibratoRate(rate);
-  }, []);
-
-  // ── Haptics ──
+  const gestureCooldown = 1000; // ms
+  
+  // Haptics Helper
   const triggerHaptic = (duration: number) => {
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
       navigator.vibrate(duration);
     }
   };
 
-  // ── Gesture feedback ──
-  const showGestureFeedback = (text: string) => {
-    setGestureFeedback(text);
-    setTimeout(() => setGestureFeedback(null), 1400);
-  };
+  // Constants
+  const MIN_FREQ = 100;
+  const MAX_FREQ = 1500;
+  const WAVES: WaveformType[] = ['sine', 'triangle', 'sawtooth', 'square'];
 
-  // ── Gesture detection ──
+  // Logic functions referenced in onResults need to access current state, 
+  // so we use refs or functional updates.
+  const waveformRef = useRef(waveform);
+  const delayMixRef = useRef(delayMix);
+  
+  useEffect(() => { waveformRef.current = waveform; }, [waveform]);
+  useEffect(() => { delayMixRef.current = delayMix; }, [delayMix]);
+
+  // Smoothing loop
+  const updateAudio = useCallback(() => {
+    // Smooth the values
+    currentPitch.current = lerp(currentPitch.current, targetPitch.current, 0.15);
+    currentVol.current = lerp(currentVol.current, targetVol.current, 0.15);
+
+    // Apply to engine
+    audioEngine.setFrequency(currentPitch.current);
+    audioEngine.setVolume(currentVol.current);
+
+    // Update UI for visual feedback (throttled by React render, but okay for text)
+    setActivePitch(Math.round(currentPitch.current));
+    setActiveVol(Math.round(currentVol.current * 100));
+
+    animationFrameRef.current = requestAnimationFrame(updateAudio);
+  }, []);
+
   const handleGestureDetection = (landmarks: HandLandmark[], label: string) => {
     const now = Date.now();
     if (now - lastGestureTime.current < gestureCooldown) return;
 
+    // GESTURE 1: PINCH (Index + Thumb) on RIGHT HAND (Pitch) -> Cycle Waveform
     if (label === 'Right') {
-      // PINCH → cycle waveform
       const pinchDist = getDistance(landmarks[4], landmarks[8]);
-      if (pinchDist < 0.05) {
-        const next = WAVES[(WAVES.indexOf(waveformRef.current) + 1) % WAVES.length];
-        handleWaveformChange(next);
+      if (pinchDist < 0.05) { // Threshold for pinch
+        const currentIndex = WAVES.indexOf(waveformRef.current);
+        const nextIndex = (currentIndex + 1) % WAVES.length;
+        const nextWave = WAVES[nextIndex];
+        
+        handleWaveformChange(nextWave);
         triggerHaptic(50);
-        showGestureFeedback(`WAVEFORM: ${next.toUpperCase()}`);
+        showGestureFeedback(`WAVEFORM: ${nextWave.toUpperCase()}`);
         lastGestureTime.current = now;
       }
     }
 
+    // GESTURE 2: FIST (Closed Hand) on LEFT HAND (Volume) -> Toggle Delay
     if (label === 'Left') {
-      // FIST → toggle delay
+      // Check if fingers are curled (Tips close to Wrist)
       const wrist = landmarks[0];
-      const tips  = [8, 12, 16, 20];
-      let curled  = 0;
+      const tips = [8, 12, 16, 20]; // Index, Middle, Ring, Pinky
+      let curledCount = 0;
       for (const t of tips) {
-        if (getDistance(landmarks[t], wrist) < 0.15) curled++;
+        if (getDistance(landmarks[t], wrist) < 0.15) curledCount++;
       }
-      if (curled >= 3) {
+
+      if (curledCount >= 3) {
+        // Toggle Delay
         const newMix = delayMixRef.current > 0.1 ? 0 : 0.5;
         handleDelayChange(newMix);
         triggerHaptic(50);
@@ -181,141 +122,155 @@ const App: React.FC = () => {
     }
   };
 
-  // ── Audio smoothing loop ──
-  const updateAudio = useCallback(() => {
-    currentPitch.current = lerp(currentPitch.current, targetPitch.current, 0.15);
-    currentVol.current   = lerp(currentVol.current,   targetVol.current,   0.15);
+  const showGestureFeedback = (text: string) => {
+    setGestureFeedback(text);
+    setTimeout(() => setGestureFeedback(null), 1500);
+  };
 
-    audioEngine.setFrequency(currentPitch.current);
-    audioEngine.setVolume(currentVol.current);
-
-    if (hudRef.current) {
-      hudRef.current.updateValues(currentPitch.current, currentVol.current);
-    }
-
-    animationFrameRef.current = requestAnimationFrame(updateAudio);
-  }, []);
-
-  // ── MediaPipe onResults ──
   const onResults = useCallback((results: Results) => {
     const canvas = canvasRef.current;
-    const ctx    = canvas?.getContext('2d');
+    const ctx = canvas?.getContext('2d');
+
     if (!canvas || !ctx) return;
 
+    // Reset canvas
     ctx.save();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-
-    // Subtle grid overlay
-    ctx.strokeStyle = 'rgba(0,255,255,0.07)';
+    
+    // Draw sci-fi grid overlay
+    ctx.strokeStyle = 'rgba(0, 255, 255, 0.1)';
     ctx.lineWidth = 1;
-    ctx.setLineDash([4, 8]);
-    ctx.beginPath(); ctx.moveTo(0, canvas.height / 2); ctx.lineTo(canvas.width, canvas.height / 2); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(canvas.width / 2, 0); ctx.lineTo(canvas.width / 2, canvas.height); ctx.stroke();
-    ctx.setLineDash([]);
+    // Horizontal line (Volume median)
+    ctx.beginPath();
+    ctx.moveTo(0, canvas.height/2);
+    ctx.lineTo(canvas.width, canvas.height/2);
+    ctx.stroke();
+    // Vertical line (Pitch median)
+    ctx.beginPath();
+    ctx.moveTo(canvas.width/2, 0);
+    ctx.lineTo(canvas.width/2, canvas.height);
+    ctx.stroke();
 
     let rHandFound = false;
     let lHandFound = false;
 
-    if (results.multiHandLandmarks?.length > 0) {
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
       for (let i = 0; i < results.multiHandLandmarks.length; i++) {
-        const landmarks  = results.multiHandLandmarks[i];
+        const landmarks = results.multiHandLandmarks[i];
         const handedness = results.multiHandedness[i];
-        const label      = handedness.label;
-        const indexTip   = landmarks[8];
+        
+        window.drawConnectors(ctx, landmarks, window.HAND_CONNECTIONS, { color: '#00ffff', lineWidth: 2 });
+        window.drawLandmarks(ctx, landmarks, { color: '#ffffff', lineWidth: 1, radius: 3 });
 
-        window.drawConnectors(ctx, landmarks, window.HAND_CONNECTIONS, {
-          color: label === 'Right' ? '#00ffff' : '#00ff88',
-          lineWidth: 2,
-        });
-        window.drawLandmarks(ctx, landmarks, {
-          color: '#fff',
-          lineWidth: 1,
-          radius: 3,
-        });
-
+        const label = handedness.label; // "Left" or "Right"
+        const indexTip = landmarks[8];
+        
+        // Check Gestures
         handleGestureDetection(landmarks, label);
 
         if (label === 'Right') {
+          // PITCH CONTROL (User's Right Hand)
           rHandFound = true;
+          
+          // Map X (0-1) to Frequency
+          // Use raw X (0 is left of image, 1 is right of image)
           const pitchVal = MIN_FREQ + (1 - indexTip.x) * (MAX_FREQ - MIN_FREQ);
           targetPitch.current = Math.max(MIN_FREQ, Math.min(MAX_FREQ, pitchVal));
-
-          // Pitch marker ring
+          
+          // Visual Marker for Pitch
           ctx.beginPath();
-          ctx.arc(indexTip.x * canvas.width, indexTip.y * canvas.height, 18, 0, 2 * Math.PI);
-          ctx.strokeStyle = '#00ffff';
-          ctx.lineWidth = 2;
-          ctx.shadowBlur = 12;
-          ctx.shadowColor = '#00ffff';
+          ctx.arc(indexTip.x * canvas.width, indexTip.y * canvas.height, 15, 0, 2 * Math.PI);
+          ctx.fillStyle = 'rgba(0, 255, 255, 0.5)';
+          ctx.fill();
           ctx.stroke();
-          ctx.shadowBlur = 0;
+          
+          ctx.fillStyle = '#0ff';
+          ctx.font = '12px monospace';
+          ctx.fillText(`FREQ: ${Math.round(targetPitch.current)}Hz`, indexTip.x * canvas.width + 20, indexTip.y * canvas.height);
 
         } else {
+          // VOLUME CONTROL (User's Left Hand)
           lHandFound = true;
-          const volVal = 1 - indexTip.y;
+          
+          // Map Y (0-1) to Volume
+          // 0 (Top) -> Loud (1.0), 1 (Bottom) -> Quiet (0.0)
+          const volVal = 1 - indexTip.y; 
           targetVol.current = Math.max(0, Math.min(1, volVal));
-
-          // Volume marker ring (scales with vol)
-          const radius = 14 + volVal * 22;
+          
+          // Visual Marker for Volume
           ctx.beginPath();
-          ctx.arc(indexTip.x * canvas.width, indexTip.y * canvas.height, radius, 0, 2 * Math.PI);
-          ctx.strokeStyle = `rgba(0,255,136,${0.5 + volVal * 0.5})`;
-          ctx.lineWidth = 2;
-          ctx.shadowBlur = 10;
-          ctx.shadowColor = '#00ff88';
+          ctx.arc(indexTip.x * canvas.width, indexTip.y * canvas.height, 15 + (volVal * 20), 0, 2 * Math.PI);
+          ctx.fillStyle = `rgba(0, 255, 100, ${0.3 + volVal * 0.5})`;
+          ctx.fill();
           ctx.stroke();
-          ctx.shadowBlur = 0;
+          
+          ctx.fillStyle = '#0f8';
+          ctx.font = '12px monospace';
+          ctx.fillText(`VOL: ${Math.round(volVal * 100)}%`, indexTip.x * canvas.width + 20, indexTip.y * canvas.height);
         }
       }
     }
 
-    if (!lHandFound) targetVol.current = 0;
-
-    if (hudRef.current) {
-      hudRef.current.setRightHandActive(rHandFound);
-      hudRef.current.setLeftHandActive(lHandFound);
+    // Haptic on Entry (State change detection)
+    // We use the Functional Update pattern setRightHandActive(prev => ...) to check transition
+    // But inside onResults (which is a callback), state might be stale if not careful.
+    // However, since onResults is recreated on dep change or we use refs.
+    // To simplify: we track prev state in refs or just rely on the React State setter callback
+    // Not easy to do side effect inside setState updater.
+    // Let's just compare with the state available in closure (which might be stale if not updating onResults)
+    // Actually, onResults is wrapped in useCallback with [] dep, so it sees INITIAL state. 
+    // This is a bug in the previous code too. onResults should either have deps or use refs.
+    // We will use Refs for detection state to trigger haptics accurately.
+    
+    // We update the state hooks for UI, but use Refs for logic.
+    const prevR = rightHandActive; // This will be stale in current closure setup
+    // Let's use a Ref for "WasHandFound"
+    
+    // Auto-mute if hands are missing
+    if (!lHandFound) {
+      targetVol.current = 0; 
     }
 
+    // Trigger state updates
+    setRightHandActive(prev => {
+      if (!prev && rHandFound) triggerHaptic(15); // Hand entered
+      return rHandFound;
+    });
+    setLeftHandActive(prev => {
+      if (!prev && lHandFound) triggerHaptic(15); // Hand entered
+      return lHandFound;
+    });
+
     ctx.restore();
-  }, []);
+  }, []); // Intentionally empty deps to prevent MediaPipe re-init loop, using functional state updates for haptics
 
-  // ── Keyboard shortcuts ──
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (!isStarted) return;
-      if (e.key === '1') handleWaveformChange('sine');
-      if (e.key === '2') handleWaveformChange('triangle');
-      if (e.key === '3') handleWaveformChange('sawtooth');
-      if (e.key === '4') handleWaveformChange('square');
-      if (e.key === 'a' || e.key === 'A') handleAnalogModeChange(!isAnalogMode);
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [isStarted, isAnalogMode, handleWaveformChange, handleAnalogModeChange]);
-
-  // ── Initialize ──
   const initializeTheremin = async () => {
     setIsLoading(true);
     setError(null);
 
     try {
+      // 1. Init Audio
       await audioEngine.init();
       audioEngine.start();
-
+      
+      // Update Audio Loop
       cancelAnimationFrame(animationFrameRef.current);
       updateAudio();
 
+      // 2. Init Camera & MediaPipe
       if (videoRef.current && canvasRef.current) {
         const hands = new window.Hands({
-          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+          locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+          }
         });
 
         hands.setOptions({
           maxNumHands: 2,
           modelComplexity: 1,
-          minDetectionConfidence: 0.6,
-          minTrackingConfidence: 0.5,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
         });
 
         hands.onResults(onResults);
@@ -328,9 +283,9 @@ const App: React.FC = () => {
             }
           },
           width: 1280,
-          height: 720,
+          height: 720
         });
-
+        
         cameraRef.current = camera;
         await camera.start();
       }
@@ -338,153 +293,134 @@ const App: React.FC = () => {
       setIsStarted(true);
     } catch (err: any) {
       console.error(err);
-      setError('Failed to initialize camera or audio. Please ensure permissions are granted.');
+      setError("Failed to initialize camera or audio. Please ensure permissions are granted.");
     } finally {
       setIsLoading(false);
     }
   };
 
-  // ── Render ──
+  // Handle Controls
+  const handleWaveformChange = (type: WaveformType) => {
+    setWaveform(type);
+    audioEngine.setWaveform(type);
+  };
+
+  const handleDelayChange = (mix: number) => {
+    setDelayMix(mix);
+    audioEngine.setDelayMix(mix);
+  };
+
   return (
-    <>
-      <ParticleBackground />
-
-      <div className="app-root">
-
-        {/* ── Header ── */}
-        <header className="app-header">
-          <div className="header-brand">
-            <h1 className="glow-text">
-              THEREMIN<span className="exe">.exe</span>
-            </h1>
-            <p>Touchless Audio Synthesis Interface</p>
+    <div className="relative w-full h-full flex flex-col items-center justify-between p-4 bg-slate-950 overflow-hidden text-cyan-400 font-mono">
+      
+      {/* Header */}
+      <header className="z-10 w-full max-w-4xl flex justify-between items-end border-b border-cyan-800 pb-2 mb-4">
+        <div>
+          <h1 className="text-3xl md:text-5xl font-bold tracking-tighter glow-text">THEREMIN<span className="text-sm align-top opacity-70">.exe</span></h1>
+          <p className="text-xs md:text-sm text-cyan-600 tracking-widest uppercase">Touchless Audio Synthesis Interface</p>
+        </div>
+        <div className="text-right hidden md:block">
+          <div className={`text-xs ${isStarted ? 'text-green-400' : 'text-red-500'}`}>
+            SYSTEM STATUS: {isStarted ? 'ONLINE' : 'STANDBY'}
           </div>
-          <div className="header-status">
-            <div style={{ color: isStarted ? 'var(--green)' : '#ff4444', fontSize: '0.65rem' }}>
-              <span className={`status-dot ${isStarted ? 'online' : 'offline'}`} />
-              {isStarted ? 'SYSTEM ONLINE' : 'STANDBY'}
+          <div className="text-[10px] text-cyan-700">v1.0.5 // HAPTIC_ENABLED</div>
+        </div>
+      </header>
+
+      {/* Main Viewport */}
+      <main className="relative z-10 w-full max-w-4xl flex-1 flex flex-col items-center justify-center min-h-[300px]">
+        
+        {/* Video Container */}
+        <div className="relative w-full h-full bg-black rounded-lg border-2 border-cyan-900 shadow-[0_0_20px_rgba(0,255,255,0.1)] overflow-hidden">
+          
+          {/* Hidden Source Video */}
+          <video 
+            ref={videoRef} 
+            className="absolute top-0 left-0 w-full h-full object-cover opacity-0 pointer-events-none" 
+            playsInline
+          />
+          
+          {/* Output Canvas */}
+          <canvas 
+            ref={canvasRef} 
+            className="absolute top-0 left-0 w-full h-full object-cover transform -scale-x-100" 
+            width={1280} 
+            height={720}
+          />
+
+          {/* Gesture Feedback Overlay */}
+          {gestureFeedback && (
+            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-40 pointer-events-none">
+               <div className="bg-black/70 border-2 border-cyan-400 text-cyan-400 px-6 py-4 rounded-xl text-2xl font-bold tracking-widest animate-bounce shadow-[0_0_30px_rgba(0,255,255,0.3)] backdrop-blur-md">
+                 {gestureFeedback}
+               </div>
             </div>
-            <div className="header-version">v2.0.0 // ENHANCED</div>
+          )}
+
+          {/* Start Overlay */}
+          {!isStarted && !isLoading && (
+            <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-50 backdrop-blur-sm">
+              <button 
+                onClick={initializeTheremin}
+                className="group relative px-8 py-4 bg-transparent border-2 border-cyan-500 text-cyan-500 text-xl font-bold uppercase tracking-widest hover:bg-cyan-500 hover:text-black transition-all duration-300 neon-border"
+              >
+                Initialize System
+                <div className="absolute inset-0 bg-cyan-400/20 blur-xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
+              </button>
+              {error && <p className="mt-4 text-red-500 bg-black/50 p-2 rounded border border-red-900">{error}</p>}
+            </div>
+          )}
+
+          {/* Loading Overlay */}
+          {isLoading && (
+            <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center z-50">
+              <div className="w-16 h-16 border-4 border-cyan-900 border-t-cyan-400 rounded-full animate-spin mb-4"></div>
+              <p className="text-cyan-400 animate-pulse tracking-widest">CALIBRATING SENSORS...</p>
+            </div>
+          )}
+        </div>
+        
+        {/* HUD Data */}
+        {isStarted && (
+          <div className="absolute top-4 left-4 flex flex-col gap-2 pointer-events-none">
+            <div className={`p-2 rounded border transition-colors duration-300 ${leftHandActive ? 'border-green-500 bg-green-900/20 text-green-400' : 'border-slate-700 bg-black/50 text-slate-500'}`}>
+              <div className="text-[10px] uppercase tracking-wider">Left Hand (Vol)</div>
+              <div className="text-xl font-bold">{activeVol}%</div>
+              {leftHandActive && <div className="text-[9px] mt-1 text-green-600">GESTURE: FIST (DELAY)</div>}
+            </div>
           </div>
-        </header>
-
-        {/* ── Main Viewport ── */}
-        <main className="app-main">
-          <div className="video-container">
-
-            {/* Zone guide lines (shown when started) */}
-            {isStarted && (
-              <div className="zone-guides">
-                <div className="zone-pitch-marker" />
-                <div className="zone-vol-marker" />
-                <span className="zone-label pitch-low">◀ LOW PITCH</span>
-                <span className="zone-label pitch-high">HIGH PITCH ▶</span>
-                <span className="zone-label vol-high">▲ LOUD</span>
-                <span className="zone-label vol-low">▼ QUIET</span>
-              </div>
-            )}
-
-            {/* Hidden source video */}
-            <video ref={videoRef} className="source-video" playsInline />
-
-            {/* Output canvas (mirrored) */}
-            <canvas
-              ref={canvasRef}
-              className="output-canvas"
-              width={1280}
-              height={720}
-            />
-
-            {/* HUD */}
-            <HUD ref={hudRef} />
-
-            {/* Gesture Feedback */}
-            {gestureFeedback && (
-              <div className="gesture-popup">{gestureFeedback}</div>
-            )}
-
-            {/* Start Overlay */}
-            {!isStarted && !isLoading && (
-              <div className="start-overlay">
-                <h2 className="glow-text">EtherWave Theremin</h2>
-
-                <div className="instructions-grid">
-                  <div className="instruction-card">
-                    <div className="hand-icon">🤚</div>
-                    <div className="hand-label">Right Hand</div>
-                    <div className="hand-desc">Move ←→ to change pitch</div>
-                  </div>
-                  <div className="instruction-card left">
-                    <div className="hand-icon">🤚</div>
-                    <div className="hand-label">Left Hand</div>
-                    <div className="hand-desc">Move ↑↓ to control volume</div>
-                  </div>
-                  <div className="instruction-card">
-                    <div className="hand-icon">🤏</div>
-                    <div className="hand-label">Pinch (Right)</div>
-                    <div className="hand-desc">Cycle waveform</div>
-                  </div>
-                  <div className="instruction-card left">
-                    <div className="hand-icon">✊</div>
-                    <div className="hand-label">Fist (Left)</div>
-                    <div className="hand-desc">Toggle spooky delay</div>
-                  </div>
-                </div>
-
-                <button id="btn-initialize" className="btn-init" onClick={initializeTheremin}>
-                  Initialize System
-                </button>
-
-                {error && <p className="error-msg">{error}</p>}
-              </div>
-            )}
-
-            {/* Loading Overlay */}
-            {isLoading && (
-              <div className="loading-overlay">
-                <div className="spinner" />
-                <p className="loading-text">Calibrating Sensors...</p>
-              </div>
-            )}
+        )}
+        {isStarted && (
+          <div className="absolute top-4 right-4 flex flex-col gap-2 pointer-events-none text-right">
+            <div className={`p-2 rounded border transition-colors duration-300 ${rightHandActive ? 'border-cyan-500 bg-cyan-900/20 text-cyan-400' : 'border-slate-700 bg-black/50 text-slate-500'}`}>
+              <div className="text-[10px] uppercase tracking-wider">Right Hand (Pitch)</div>
+              <div className="text-xl font-bold">{activePitch} Hz</div>
+              {rightHandActive && <div className="text-[9px] mt-1 text-cyan-600">GESTURE: PINCH (WAVE)</div>}
+            </div>
           </div>
-        </main>
+        )}
 
-        {/* ── Footer: Visualizer + Controls ── */}
-        <footer className="app-footer">
-          <div className="footer-row">
-            <Visualizer />
-            <Controls
-              waveform={waveform}
-              onWaveformChange={handleWaveformChange}
-              delayMix={delayMix}
-              onDelayMixChange={handleDelayChange}
-              isAnalogMode={isAnalogMode}
-              onAnalogModeChange={handleAnalogModeChange}
-              vibratoDepth={vibratoDepth}
-              onVibratoDepthChange={handleVibratoDepthChange}
-              vibratoRate={vibratoRate}
-              onVibratoRateChange={handleVibratoRateChange}
-            />
-          </div>
+      </main>
 
-          <div className="kb-hints">
-            <span className="kb-key"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd> Waveform</span>
-            <span>·</span>
-            <span className="kb-key"><kbd>A</kbd> Analog Mode</span>
-            <span>·</span>
-            <span>Pinch (Right) = cycle wave · Fist (Left) = toggle delay</span>
-          </div>
+      {/* Controls & Visualizer Footer */}
+      <footer className="z-10 w-full max-w-4xl mt-4 flex flex-col gap-4">
+        
+        <div className="flex flex-col md:flex-row gap-4 w-full items-stretch">
+          <Visualizer />
+          <Controls 
+            waveform={waveform} 
+            onWaveformChange={handleWaveformChange}
+            delayMix={delayMix}
+            onDelayMixChange={handleDelayChange}
+          />
+        </div>
 
-          <div className="footer-credits">
-            Latency: Low &nbsp;·&nbsp; Audio: WebAudio API &nbsp;·&nbsp; Vision: MediaPipe Hands
-          </div>
-        </footer>
+        <div className="w-full text-center text-[10px] text-cyan-900/50 uppercase">
+          Latency: Low • Audio: WebAudio API • Vision: MediaPipe Hands • Gestures: Pinch/Fist
+        </div>
+      </footer>
 
-      </div>
-
-      {/* CRT scanlines */}
-      <div className="scanlines" style={{ position: 'fixed', inset: 0 }} />
-    </>
+    </div>
   );
 };
 
