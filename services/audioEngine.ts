@@ -14,13 +14,19 @@ export class AudioEngine {
 
   // Parameters
   private currentType: WaveformType = 'sine';
-  private currentDelayMix: number = 0.3; // 0 to 1
+  private currentDelayMix: number = 0.3;
+  private currentVibratoDepth: number = 0;
+  private currentVibratoRate: number = 5;
 
   private driveNode: WaveShaperNode | null = null;
   private isAnalogMode: boolean = false;
 
+  // Vibrato LFO
+  private vibratoLFO: OscillatorNode | null = null;
+  private vibratoGain: GainNode | null = null;
+
   constructor() {
-    // Initial setup is deferred until user interaction
+    // Deferred init until user gesture
   }
 
   public async init() {
@@ -30,7 +36,7 @@ export class AudioEngine {
 
     // Master Gain (Final Output Volume)
     this.masterGain = this.ctx.createGain();
-    this.masterGain.gain.value = 0; // Start silent
+    this.masterGain.gain.value = 0;
 
     // Analyser (Visualizer)
     this.analyser = this.ctx.createAnalyser();
@@ -40,33 +46,41 @@ export class AudioEngine {
 
     // Saturation / Drive Node (Analog Warmth)
     this.driveNode = this.ctx.createWaveShaper();
-    this.driveNode.curve = this.makeDistortionCurve(50); // Warning: Heavy processing if re-calc
+    this.driveNode.curve = this.makeDistortionCurve(50);
     this.driveNode.oversample = '4x';
 
     // Delay Network
-    this.delayNode = this.ctx.createDelay();
-    this.delayNode.delayTime.value = 0.4; // 400ms delay
+    this.delayNode = this.ctx.createDelay(2.0);
+    this.delayNode.delayTime.value = 0.4;
 
     this.feedbackGain = this.ctx.createGain();
-    this.feedbackGain.gain.value = 0.4; // Feedback amount
+    this.feedbackGain.gain.value = 0.4;
 
     this.delayWetGain = this.ctx.createGain();
     this.delayDryGain = this.ctx.createGain();
 
     this.updateDelayMix(this.currentDelayMix);
 
-    // Routing: 
-    // Osc -> Drive (optional) -> Split -> Dry/Delay -> Master
-
+    // Routing: Osc -> Drive (optional) -> Split -> Dry/Delay -> Master
     this.delayNode.connect(this.feedbackGain);
     this.feedbackGain.connect(this.delayNode);
     this.delayNode.connect(this.delayWetGain);
 
     this.delayWetGain.connect(this.masterGain);
     this.delayDryGain.connect(this.masterGain);
+
+    // Vibrato LFO setup
+    this.vibratoLFO = this.ctx.createOscillator();
+    this.vibratoLFO.type = 'sine';
+    this.vibratoLFO.frequency.value = this.currentVibratoRate;
+
+    this.vibratoGain = this.ctx.createGain();
+    this.vibratoGain.gain.value = this.currentVibratoDepth;
+
+    this.vibratoLFO.connect(this.vibratoGain);
+    this.vibratoLFO.start();
   }
 
-  // Soft clipping curve for tube-like saturation
   private makeDistortionCurve(amount: number) {
     const k = typeof amount === 'number' ? amount : 50;
     const n_samples = 44100;
@@ -84,15 +98,18 @@ export class AudioEngine {
 
     this.osc = this.ctx.createOscillator();
     this.osc.type = this.currentType;
-    this.osc.frequency.value = 440; // Default A4
+    this.osc.frequency.value = 440;
 
-    // Connect Osc to Saturation or directly to Mix
+    // Connect vibrato LFO to oscillator frequency
+    if (this.vibratoGain) {
+      this.vibratoGain.connect(this.osc.frequency);
+    }
+
     this.connectOscillator();
 
     this.osc.start();
     this.isPlaying = true;
 
-    // Resume context if suspended (browser policy)
     if (this.ctx.state === 'suspended') {
       this.ctx.resume();
     }
@@ -104,13 +121,11 @@ export class AudioEngine {
     this.osc.disconnect();
 
     if (this.isAnalogMode && this.driveNode) {
-      // Analog Mode: Osc -> Drive -> Split
       this.osc.connect(this.driveNode);
-      this.driveNode.disconnect(); // Reset connections
+      this.driveNode.disconnect();
       this.driveNode.connect(this.delayNode!);
       this.driveNode.connect(this.delayDryGain!);
     } else {
-      // Digital Mode: Osc -> Split
       this.osc.connect(this.delayNode!);
       this.osc.connect(this.delayDryGain!);
     }
@@ -130,8 +145,6 @@ export class AudioEngine {
       this.osc = null;
     }
     this.isPlaying = false;
-
-    // Mute output
     if (this.masterGain) {
       this.masterGain.gain.setTargetAtTime(0, this.ctx!.currentTime, 0.1);
     }
@@ -139,17 +152,13 @@ export class AudioEngine {
 
   public setFrequency(freq: number) {
     if (this.osc && this.ctx) {
-      // Smooth transition
       this.osc.frequency.setTargetAtTime(freq, this.ctx.currentTime, 0.05);
     }
   }
 
   public setVolume(volume: number) {
     if (this.masterGain && this.ctx) {
-      // Logarithmic Volume Curve: Vol^2
-      // This makes the transition from silence much smoother
       const logVol = volume * volume;
-
       this.masterGain.gain.setTargetAtTime(logVol, this.ctx.currentTime, 0.05);
     }
   }
@@ -174,8 +183,29 @@ export class AudioEngine {
     }
   }
 
+  public setVibratoDepth(depth: number) {
+    // depth: 0 to 1, mapped to 0–50 Hz cents deviation
+    this.currentVibratoDepth = depth;
+    if (this.vibratoGain && this.ctx) {
+      const amount = depth * 50; // max 50 Hz of pitch wobble
+      this.vibratoGain.gain.setTargetAtTime(amount, this.ctx.currentTime, 0.08);
+    }
+  }
+
+  public setVibratoRate(rate: number) {
+    // rate: 0.5 to 12 Hz
+    this.currentVibratoRate = rate;
+    if (this.vibratoLFO && this.ctx) {
+      this.vibratoLFO.frequency.setTargetAtTime(rate, this.ctx.currentTime, 0.05);
+    }
+  }
+
   public getAnalyser(): AnalyserNode | null {
     return this.analyser;
+  }
+
+  public isInitialized(): boolean {
+    return this.ctx !== null;
   }
 }
 

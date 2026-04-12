@@ -1,57 +1,100 @@
-import React, { useImperativeHandle, forwardRef, useState, useRef, useEffect } from 'react';
+import React, { useImperativeHandle, forwardRef, useRef, useCallback } from 'react';
+
+// Mapping of frequencies to note names
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+function freqToNote(freq: number): string {
+  if (freq <= 0) return '---';
+  const noteNum = 12 * (Math.log2(freq / 440)) + 69;
+  const noteIndex = Math.round(noteNum) % 12;
+  const octave = Math.floor(Math.round(noteNum) / 12) - 1;
+  const noteIdx = ((noteIndex % 12) + 12) % 12;
+  return `${NOTE_NAMES[noteIdx]}${octave}`;
+}
 
 export interface HUDRef {
-    updateValues: (pitch: number, volume: number) => void;
-    setRightHandActive: (active: boolean) => void;
-    setLeftHandActive: (active: boolean) => void;
+  updateValues: (pitch: number, volume: number) => void;
+  setRightHandActive: (active: boolean) => void;
+  setLeftHandActive: (active: boolean) => void;
 }
 
 export const HUD = forwardRef<HUDRef, {}>((props, ref) => {
-    const [pitch, setPitch] = useState(0);
-    const [vol, setVol] = useState(0);
-    const [rightActive, setRightActive] = useState(false);
-    const [leftActive, setLeftActive] = useState(false);
+  // Use direct DOM manipulation to avoid React re-render overhead at 60fps
+  const pitchValRef = useRef<HTMLDivElement>(null);
+  const noteValRef  = useRef<HTMLDivElement>(null);
+  const volValRef   = useRef<HTMLDivElement>(null);
+  const volBarRef   = useRef<HTMLDivElement>(null);
+  const leftPanelRef  = useRef<HTMLDivElement>(null);
+  const rightPanelRef = useRef<HTMLDivElement>(null);
+  const noteBadgeRef  = useRef<HTMLDivElement>(null);
 
-    // Throttling ref
-    const lastUpdate = useRef(0);
+  const lastUpdate = useRef(0);
+  const rightActive = useRef(false);
+  const leftActive  = useRef(false);
 
-    useImperativeHandle(ref, () => ({
-        updateValues: (newPitch: number, newVol: number) => {
-            const now = Date.now();
-            // Update at max 30fps to keep UI responsive but not overload React
-            if (now - lastUpdate.current > 32) {
-                setPitch(Math.round(newPitch));
-                setVol(Math.round(newVol * 100));
-                lastUpdate.current = now;
-            }
-        },
-        setRightHandActive: (active: boolean) => setRightActive(active),
-        setLeftHandActive: (active: boolean) => setLeftActive(active)
-    }));
+  const updateDOM = useCallback((pitch: number, vol: number) => {
+    if (pitchValRef.current)  pitchValRef.current.textContent  = `${Math.round(pitch)} Hz`;
+    if (noteValRef.current)   noteValRef.current.textContent   = freqToNote(pitch);
+    if (volValRef.current)    volValRef.current.textContent    = `${Math.round(vol * 100)}%`;
+    if (volBarRef.current)    volBarRef.current.style.width    = `${Math.round(vol * 100)}%`;
+    if (noteBadgeRef.current) noteBadgeRef.current.textContent = `♪ ${freqToNote(pitch)}  ·  ${Math.round(pitch)} Hz`;
+  }, []);
 
-    if (!rightActive && !leftActive) return null;
+  useImperativeHandle(ref, () => ({
+    updateValues: (pitch: number, vol: number) => {
+      const now = Date.now();
+      if (now - lastUpdate.current > 30) { // ~33fps cap
+        lastUpdate.current = now;
+        updateDOM(pitch, vol);
+      }
+    },
+    setRightHandActive: (active: boolean) => {
+      if (rightActive.current === active) return;
+      rightActive.current = active;
+      if (rightPanelRef.current) {
+        rightPanelRef.current.style.display = active ? 'block' : 'none';
+      }
+      // Show/hide note badge if either hand is visible
+      if (noteBadgeRef.current) {
+        noteBadgeRef.current.style.display = (active || leftActive.current) ? 'block' : 'none';
+      }
+    },
+    setLeftHandActive: (active: boolean) => {
+      if (leftActive.current === active) return;
+      leftActive.current = active;
+      if (leftPanelRef.current) {
+        leftPanelRef.current.style.display = active ? 'block' : 'none';
+      }
+      if (noteBadgeRef.current) {
+        noteBadgeRef.current.style.display = (active || rightActive.current) ? 'block' : 'none';
+      }
+    }
+  }));
 
-    return (
-        <>
-            {leftActive && (
-                <div className="absolute top-4 left-4 flex flex-col gap-2 pointer-events-none">
-                    <div className="p-2 rounded border transition-colors duration-300 border-green-500 bg-green-900/20 text-green-400">
-                        <div className="text-[10px] uppercase tracking-wider">Left Hand (Vol)</div>
-                        <div className="text-xl font-bold">{vol}%</div>
-                        {/* Gesture feedback is handled by main app for now, or could be moved here too */}
-                    </div>
-                </div>
-            )}
-            {rightActive && (
-                <div className="absolute top-4 right-4 flex flex-col gap-2 pointer-events-none text-right">
-                    <div className="p-2 rounded border transition-colors duration-300 border-cyan-500 bg-cyan-900/20 text-cyan-400">
-                        <div className="text-[10px] uppercase tracking-wider">Right Hand (Pitch)</div>
-                        <div className="text-xl font-bold">{pitch} Hz</div>
-                    </div>
-                </div>
-            )}
-        </>
-    );
+  return (
+    <>
+      {/* Left hand: Volume */}
+      <div ref={leftPanelRef} className="hud-panel left" style={{ display: 'none' }}>
+        <div className="hud-label">Left Hand · Vol</div>
+        <div ref={volValRef} className="hud-value">0%</div>
+        <div className="vol-bar">
+          <div ref={volBarRef} className="vol-bar-fill" style={{ width: '0%' }} />
+        </div>
+      </div>
+
+      {/* Right hand: Pitch */}
+      <div ref={rightPanelRef} className="hud-panel right" style={{ display: 'none' }}>
+        <div className="hud-label">Right Hand · Pitch</div>
+        <div ref={pitchValRef} className="hud-value">440 Hz</div>
+        <div ref={noteValRef} className="hud-sub">A4</div>
+      </div>
+
+      {/* Center note badge */}
+      <div ref={noteBadgeRef} className="note-badge" style={{ display: 'none' }}>
+        ♪ A4 · 440 Hz
+      </div>
+    </>
+  );
 });
 
 HUD.displayName = 'HUD';

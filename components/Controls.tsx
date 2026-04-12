@@ -8,7 +8,18 @@ interface ControlsProps {
   onDelayMixChange: (mix: number) => void;
   isAnalogMode: boolean;
   onAnalogModeChange: (enabled: boolean) => void;
+  vibratoDepth: number;
+  onVibratoDepthChange: (depth: number) => void;
+  vibratoRate: number;
+  onVibratoRateChange: (rate: number) => void;
 }
+
+const WAVES: { id: WaveformType; label: string; symbol: string }[] = [
+  { id: 'sine',     label: 'Sine',     symbol: '∿' },
+  { id: 'triangle', label: 'Tri',      symbol: '△' },
+  { id: 'sawtooth', label: 'Saw',      symbol: '⊿' },
+  { id: 'square',   label: 'Sqr',      symbol: '⊓' },
+];
 
 export const Controls = React.memo<ControlsProps>(({
   waveform,
@@ -16,75 +27,97 @@ export const Controls = React.memo<ControlsProps>(({
   delayMix,
   onDelayMixChange,
   isAnalogMode,
-  onAnalogModeChange
+  onAnalogModeChange,
+  vibratoDepth,
+  onVibratoDepthChange,
+  vibratoRate,
+  onVibratoRateChange,
 }) => {
-
-  const waves: WaveformType[] = ['sine', 'triangle', 'sawtooth', 'square'];
-
   return (
-    <div className="flex flex-col md:flex-row gap-6 bg-slate-900/80 p-6 rounded-xl border border-cyan-800 shadow-[0_0_15px_rgba(0,255,255,0.1)] backdrop-blur-md w-full max-w-2xl z-20">
+    <div className="controls-panel">
 
-      {/* Waveform Selector */}
-      <div className="flex-1">
-        <label className="block text-cyan-400 text-xs font-mono uppercase mb-3 tracking-widest">
-          Oscillator Waveform
-        </label>
-        <div className="grid grid-cols-4 gap-2">
-          {waves.map((w) => (
+      {/* ── Left group: Oscillator ── */}
+      <div className="ctrl-group">
+        <label className="ctrl-label">Oscillator Waveform</label>
+        <div className="wave-grid">
+          {WAVES.map(({ id, label, symbol }) => (
             <button
-              key={w}
-              onClick={() => onWaveformChange(w)}
-              className={`
-                h-10 rounded border border-cyan-700 text-xs font-bold uppercase tracking-wider transition-all
-                ${waveform === w
-                  ? 'bg-cyan-500 text-black shadow-[0_0_10px_#0ff]'
-                  : 'bg-transparent text-cyan-600 hover:bg-cyan-900/50 hover:text-cyan-300'
-                }
-              `}
+              key={id}
+              id={`wave-${id}`}
+              onClick={() => onWaveformChange(id)}
+              className={`wave-btn${waveform === id ? ' active' : ''}`}
+              title={label}
             >
-              {w.slice(0, 3)}
+              <span style={{ fontSize: '1rem', display: 'block', lineHeight: 1.1 }}>{symbol}</span>
+              <span style={{ fontSize: '0.55rem', opacity: 0.7 }}>{label}</span>
             </button>
           ))}
         </div>
-      </div>
 
-      {/* Delay/Reverb Control */}
-      <div className="flex-1">
-        <div className="flex justify-between items-center mb-3">
-          <label className="text-cyan-400 text-xs font-mono uppercase tracking-widest">
-            Delay Feedback (Spooky Factor)
-          </label>
-          <span className="text-cyan-200 text-xs font-mono">{(delayMix * 100).toFixed(0)}%</span>
-        </div>
-        <input
-          type="range"
-          min="0"
-          max="0.8"
-          step="0.01"
-          value={delayMix}
-          onChange={(e) => onDelayMixChange(parseFloat(e.target.value))}
-          className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer border border-cyan-900 accent-cyan-400"
-        />
-        <div className="flex justify-between text-[10px] text-cyan-700 font-mono mt-1 mb-4">
-          <span>DRY</span>
-          <span>WET</span>
-        </div>
+        <div className="ctrl-divider" style={{ marginTop: 8 }} />
 
-        {/* Analog Mode Toggle */}
-        <div className="flex items-center gap-3">
-          <label className="relative inline-flex items-center cursor-pointer">
+        {/* Analog Mode */}
+        <div className="toggle-row" style={{ marginTop: 4 }}>
+          <label className="toggle-switch">
             <input
               type="checkbox"
               checked={isAnalogMode}
               onChange={(e) => onAnalogModeChange(e.target.checked)}
-              className="sr-only peer"
             />
-            <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-cyan-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-600"></div>
+            <div className="toggle-track" />
           </label>
-          <span className={`text-xs font-bold tracking-widest ${isAnalogMode ? 'text-cyan-400 glow-text' : 'text-slate-500'}`}>
-            ANALOG MODE {isAnalogMode ? '[ON]' : '[OFF]'}
+          <span className={`toggle-label ${isAnalogMode ? 'active' : 'inactive'}`}>
+            Analog Warmth {isAnalogMode ? '[ON]' : '[OFF]'}
           </span>
         </div>
+      </div>
+
+      {/* ── Right group: FX ── */}
+      <div className="ctrl-group">
+        {/* Delay */}
+        <label className="ctrl-label">Spooky Delay</label>
+        <div className="ctrl-range-row">
+          <span style={{ fontSize: '0.6rem', color: 'rgba(0,255,255,0.4)' }}>Mix</span>
+          <span className="ctrl-range-val">{(delayMix * 100).toFixed(0)}%</span>
+        </div>
+        <input
+          type="range"
+          className="sci-range"
+          min="0" max="0.8" step="0.01"
+          value={delayMix}
+          onChange={(e) => onDelayMixChange(parseFloat(e.target.value))}
+        />
+        <div className="range-ends"><span>DRY</span><span>WET</span></div>
+
+        <div className="ctrl-divider" style={{ margin: '8px 0' }} />
+
+        {/* Vibrato Depth */}
+        <label className="ctrl-label">Vibrato</label>
+        <div className="ctrl-range-row">
+          <span style={{ fontSize: '0.6rem', color: 'rgba(0,255,255,0.4)' }}>Depth</span>
+          <span className="ctrl-range-val">{(vibratoDepth * 100).toFixed(0)}%</span>
+        </div>
+        <input
+          type="range"
+          className="sci-range"
+          min="0" max="1" step="0.01"
+          value={vibratoDepth}
+          onChange={(e) => onVibratoDepthChange(parseFloat(e.target.value))}
+        />
+
+        {/* Vibrato Rate */}
+        <div className="ctrl-range-row" style={{ marginTop: 6 }}>
+          <span style={{ fontSize: '0.6rem', color: 'rgba(0,255,255,0.4)' }}>Rate</span>
+          <span className="ctrl-range-val">{vibratoRate.toFixed(1)} Hz</span>
+        </div>
+        <input
+          type="range"
+          className="sci-range"
+          min="0.5" max="12" step="0.1"
+          value={vibratoRate}
+          onChange={(e) => onVibratoRateChange(parseFloat(e.target.value))}
+        />
+        <div className="range-ends"><span>SLOW</span><span>FAST</span></div>
       </div>
 
     </div>
